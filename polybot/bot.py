@@ -1,8 +1,11 @@
+import boto3
 import telebot
 from loguru import logger
 import os
 import time
 from telebot.types import InputFile
+import requests
+import json
 
 
 class Bot:
@@ -66,12 +69,74 @@ class Bot:
 
 
 class ObjectDetectionBot(Bot):
+    def __init__(self, token, telegram_chat_url=None):
+        super().__init__(token, telegram_chat_url)
+        self.s3_client = boto3.client('s3')
+        self.s3_client = boto3.client('sqs')
+        self.sqs_queue_url = 'https://sqs.eu-north-1.amazonaws.com/352708296901/MoshikoSQS'
+
+    def send_job_to_sqs(self, s3_photo_path):
+        try:
+            job_data = {
+                "s3_photo_path": s3_photo_path,
+                "timestamp": int(time.time())
+            }
+            response = self.sqs_client.send_message(
+                QueueUrl=self.sqs_queue_url,
+                MessageBody=json.dumps(job_data)
+            )
+            logger.info(f"Job sent to SQS. Message ID: {response['MessageId']}")
+        except Exception as e:
+            logger.error(f"Failed to send job to SQS: {e}")
+
+
+    def yolo5_request(self, s3_photo_path):
+        yolo5_api = "http://yolo5:8081/predict"
+        response = requests.post(f"{yolo5_api}?imgName={s3_photo_path}")
+
+        if response.status_code == 200:
+            try:
+                return response.json()  # Attempt to parse the JSON response
+            except json.JSONDecodeError as e:
+                logger.error(f'Failed to decode JSON response: {e}')
+                return {"error": "Invalid JSON response from YOLOv5 API"}
+        else:
+            logger.error(f'Error response from YOLOv5 API: {response.status_code} - {response.text}')
+            return {"error": f"Error response from YOLOv5 API: {response.status_code}"}
+
     def handle_message(self, msg):
         logger.info(f'Incoming message: {msg}')
 
-        if self.is_current_msg_photo(msg):
-            photo_path = self.download_user_photo(msg)
+        photo_download = self.download_user_photo(msg)
+        s3_bucket = "moshikosbucket"
+        img_name = f'tg-photos/{photo_download}'
+        self.s3_client.upload_file(photo_download, s3_bucket, img_name)
+        yolo_summary = self.yolo5_request(img_name)  # Get YOLOv5 summary
+        self.send_summary_to_user(msg['chat']['id'], yolo_summary)
+        self.send_job_to_sqs(img_name)
 
-            # TODO upload the photo to S3
-            # TODO send a job to the SQS queue
-            # TODO send message to the Telegram end-user (e.g. Your image is being processed. Please wait...)
+    def send_summary_to_user(self, chat_id, yolo_summary):
+        if isinstance(yolo_summary, dict) and "labels" in yolo_summary:
+            labels = yolo_summary["labels"]
+            summary_dict = {}
+
+            for label in labels:
+                object_class = label['class']
+
+                if object_class in summary_dict:
+                    summary_dict[object_class]['count'] += 1
+                else:
+                    summary_dict[object_class] = {'count': 1}
+
+            summary_str = "Objects detected:\n"
+            for object_class, info in summary_dict.items():
+                count = info['count']
+                summary_str += f"{object_class}: {count}\n"
+
+            self.send_text(chat_id, summary_str)
+        else:
+            self.send_text(chat_id, "No objects detected in the image.")
+
+    # TODO upload the photo to S3
+    # TODO send a job to the SQS queue
+    # TODO send message to the Telegram end-user (e.g. Your image is being processed. Please wait...)
