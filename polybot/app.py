@@ -58,6 +58,7 @@ def results():
     # TODO use the prediction_id to retrieve results from DynamoDB and send to the end-user
     dynamodb = boto3.resource('dynamodb', region_name='eu-north-1')
     table = dynamodb.Table('Moshiko_Yolo')
+
     try:
         response = table.get_item(
             Key={
@@ -66,9 +67,8 @@ def results():
         )
         item = response.get('Item')
         if item:
-            chat_id = item.get('chat_id')
             text_results = item.get('text_results')
-            bot.send_text(chat_id, text_results)
+            bot.send_text(prediction_id, text_results)
             return 'Results sent to the user'
         else:
             return 'No results found for the given prediction ID'

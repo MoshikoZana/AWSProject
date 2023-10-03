@@ -72,7 +72,7 @@ class ObjectDetectionBot(Bot):
     def __init__(self, token, telegram_chat_url=None):
         super().__init__(token, telegram_chat_url)
         self.s3_client = boto3.client('s3')
-        self.s3_client = boto3.client('sqs')
+        self.sqs_client = boto3.client('sqs')
         self.sqs_queue_url = 'https://sqs.eu-north-1.amazonaws.com/352708296901/MoshikoSQS'
 
     def send_job_to_sqs(self, s3_photo_path):
