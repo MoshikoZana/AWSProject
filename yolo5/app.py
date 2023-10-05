@@ -36,7 +36,7 @@ def consume():
 
             # Receives a URL parameter representing the image to download from S3
             img_name = message_data.get('imgName')  # TODO extract from `message`
-            chat_id = message_data.get('chatId')  # TODO extract from `message`
+            chat_id = message_data.get('chat_id')  # TODO extract from `message`
             filename = img_name.split('/')[-1]
             local_dir = 'photos/'  # str of dir to save to
             os.makedirs(local_dir, exist_ok=True)  # make sure the dir exists

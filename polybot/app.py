@@ -4,14 +4,14 @@ import os
 from bot import ObjectDetectionBot
 import boto3
 from botocore.exceptions import ClientError
-
+import json
 app = flask.Flask(__name__)
 
 
 # TODO load TELEGRAM_TOKEN value from Secret Manager
 def get_secret():
 
-    secret_name = "Moshiko_Token"
+    secret_name = "MoshikoSecret"
     region_name = "eu-north-1"
 
     # Create a Secrets Manager client
@@ -31,8 +31,9 @@ def get_secret():
         raise e
 
     # Decrypts secret using the associated KMS key.
-    secret = get_secret_value_response['SecretString']
-    return secret
+    secret = json.loads(get_secret_value_response['SecretString'])
+    secret_value = secret
+    return secret_value
 
 
 TELEGRAM_TOKEN = get_secret()

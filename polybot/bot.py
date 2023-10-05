@@ -38,20 +38,25 @@ class Bot:
         Downloads the photos that sent to the Bot to `photos` directory (should be existed)
         :return:
         """
+        # could also be return non instead of run time error
         if not self.is_current_msg_photo(msg):
             raise RuntimeError(f'Message content of type \'photo\' expected')
+        else:
+            try:
+                file_info = self.telegram_bot_client.get_file(msg['photo'][-1]['file_id'])
+                data = self.telegram_bot_client.download_file(file_info.file_path)
+                folder_name = file_info.file_path.split('/')[0]
 
-        file_info = self.telegram_bot_client.get_file(msg['photo'][-1]['file_id'])
-        data = self.telegram_bot_client.download_file(file_info.file_path)
-        folder_name = file_info.file_path.split('/')[0]
+                if not os.path.exists(folder_name):
+                    os.makedirs(folder_name)
 
-        if not os.path.exists(folder_name):
-            os.makedirs(folder_name)
+                with open(file_info.file_path, 'wb') as photo:
+                    photo.write(data)
 
-        with open(file_info.file_path, 'wb') as photo:
-            photo.write(data)
-
-        return file_info.file_path
+                return file_info.file_path
+            except Exception as e:
+                logger.error(f'Error Downloading Photo: {e}')
+                return None
 
     def send_photo(self, chat_id, img_path):
         if not os.path.exists(img_path):
@@ -75,11 +80,24 @@ class ObjectDetectionBot(Bot):
         self.sqs_client = boto3.client('sqs')
         self.sqs_queue_url = 'https://sqs.eu-north-1.amazonaws.com/352708296901/MoshikoSQS'
 
-    def send_job_to_sqs(self, s3_photo_path):
+    def handle_message(self, msg):
+        logger.info(f'Incoming message: {msg}')
+
+        chat_id = msg['chat']['id']
+        if self.is_current_msg_photo(msg):
+            photo_download = self.download_user_photo(msg)
+            s3_bucket = "moshikosbucket"
+            img_name = f'tg-photos/{photo_download}'
+            self.s3_client.upload_file(photo_download, s3_bucket, img_name)
+            # yolo_summary = self.yolo5_request(img_name)  # Get YOLOv5 summary
+            # self.send_summary_to_user(msg['chat']['id'], yolo_summary)
+            self.send_job_to_sqs(chat_id, img_name)
+
+    def send_job_to_sqs(self, chat_id, s3_photo_path):
         try:
             job_data = {
                 "s3_photo_path": s3_photo_path,
-                "timestamp": int(time.time())
+                "chat_id": chat_id
             }
             response = self.sqs_client.send_message(
                 QueueUrl=self.sqs_queue_url,
@@ -88,7 +106,6 @@ class ObjectDetectionBot(Bot):
             logger.info(f"Job sent to SQS. Message ID: {response['MessageId']}")
         except Exception as e:
             logger.error(f"Failed to send job to SQS: {e}")
-
 
     def yolo5_request(self, s3_photo_path):
         yolo5_api = "http://yolo5:8081/predict"
@@ -103,17 +120,6 @@ class ObjectDetectionBot(Bot):
         else:
             logger.error(f'Error response from YOLOv5 API: {response.status_code} - {response.text}')
             return {"error": f"Error response from YOLOv5 API: {response.status_code}"}
-
-    def handle_message(self, msg):
-        logger.info(f'Incoming message: {msg}')
-
-        photo_download = self.download_user_photo(msg)
-        s3_bucket = "moshikosbucket"
-        img_name = f'tg-photos/{photo_download}'
-        self.s3_client.upload_file(photo_download, s3_bucket, img_name)
-        yolo_summary = self.yolo5_request(img_name)  # Get YOLOv5 summary
-        self.send_summary_to_user(msg['chat']['id'], yolo_summary)
-        self.send_job_to_sqs(img_name)
 
     def send_summary_to_user(self, chat_id, yolo_summary):
         if isinstance(yolo_summary, dict) and "labels" in yolo_summary:
