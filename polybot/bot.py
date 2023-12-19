@@ -7,6 +7,8 @@ from telebot.types import InputFile
 import requests
 import json
 
+REGION_NAME = os.environ['REGION_NAME']
+
 
 class Bot:
 
@@ -77,7 +79,7 @@ class ObjectDetectionBot(Bot):
     def __init__(self, token, telegram_chat_url=None):
         super().__init__(token, telegram_chat_url)
         self.s3_client = boto3.client('s3')
-        self.sqs_client = boto3.client('sqs')
+        self.sqs_client = boto3.client('sqs', region_name=REGION_NAME)
         self.sqs_queue_url = 'https://sqs.eu-north-1.amazonaws.com/352708296901/MoshikoSQS'
 
     def handle_message(self, msg):
@@ -85,6 +87,7 @@ class ObjectDetectionBot(Bot):
 
         chat_id = msg['chat']['id']
         if self.is_current_msg_photo(msg):
+            self.send_text(chat_id, "Your image is being processed. Please wait...")
             photo_download = self.download_user_photo(msg)
             s3_bucket = "moshikosbucket"
             img_name = f'tg-photos/{photo_download}'

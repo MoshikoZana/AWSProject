@@ -6,17 +6,18 @@ from loguru import logger
 import os
 import boto3
 import json
-from flask import request
+import requests
 
 images_bucket = os.environ['BUCKET_NAME']
 queue_name = os.environ['SQS_QUEUE_NAME']
+REGION_NAME = os.environ['REGION_NAME']
 
 with open("data/coco128.yaml", "r") as stream:
     names = yaml.safe_load(stream)['names']
 s3 = boto3.client('s3')
-s3_client = boto3.client('s3', region_name='eu-north-1')
-sqs_client = boto3.client('sqs', region_name='eu-north-1')
-dynamodb_client = boto3.client('dynamodb', region_name='eu-north-1')
+s3_client = boto3.client('s3', region_name=REGION_NAME)
+sqs_client = boto3.client('sqs', region_name=REGION_NAME)
+dynamodb_client = boto3.client('dynamodb', region_name=REGION_NAME)
 
 
 def consume():
@@ -35,13 +36,14 @@ def consume():
             message_data = json.loads(message)
 
             # Receives a URL parameter representing the image to download from S3
-            img_name = message_data.get('imgName')  # TODO extract from `message`
+            s3_photo_path = message_data.get('s3_photo_path')  # TODO extract from `message`
             chat_id = message_data.get('chat_id')  # TODO extract from `message`
-            filename = img_name.split('/')[-1]
             local_dir = 'photos/'  # str of dir to save to
             os.makedirs(local_dir, exist_ok=True)  # make sure the dir exists
+            filename = s3_photo_path.split('/')[-1]
             original_img_path = filename
-            s3.download_file(images_bucket, img_name, original_img_path)  # TODO download img_name from S3, store the
+            s3.download_file(images_bucket, s3_photo_path, original_img_path)  # TODO download img_name from S3,
+            # store the
             # local image path in original_img_path
 
             logger.info(f'prediction: {prediction_id}/{original_img_path}. Download img completed')
@@ -62,13 +64,15 @@ def consume():
             # boxes drawn around the detected objects, along with class labels and possibly confidence scores.
             predicted_img_path = Path(f'static/data/{prediction_id}/{original_img_path}')
 
-            # TODO Uploads the predicted image (predicted_img_path) to S3 (be careful not to override the original image).
+            # TODO Uploads the predicted image (predicted_img_path) to S3 (be careful not to override the original
+            #  image).
             predicted_img_name = f'predicted_{filename}'  # assign the new name
             os.rename(f'/usr/src/app/static/data/{prediction_id}/{filename}',
                       f'/usr/src/app/static/data/{prediction_id}/{predicted_img_name}')  # rename the file before upload
             s3_path_to_upload_to = '/'.join(
-                img_name.split('/')[:-1]) + f'/{predicted_img_name}'  # assign the path on s3 as str
-            file_to_upload = f'/usr/src/app/static/data/{prediction_id}/{predicted_img_name}'  # assign the path locally as str
+                s3_photo_path.split('/')[:-1]) + f'/{predicted_img_name}'  # assign the path on s3 as str
+            file_to_upload = f'/usr/src/app/static/data/{prediction_id}/{predicted_img_name}'  # assign the path
+            # locally as str
             s3.upload_file(file_to_upload, images_bucket,
                            s3_path_to_upload_to)  # upload the file to same path with new name s3
             os.rename(f'/usr/src/app/static/data/{prediction_id}/{predicted_img_name}',
@@ -92,14 +96,42 @@ def consume():
 
                 prediction_summary = {
                     'prediction_id': prediction_id,
-                    'original_img_path': original_img_path,
-                    'predicted_img_path': predicted_img_path,
+                    'original_img_path': str(original_img_path),
+                    'predicted_img_path': str(predicted_img_path),
                     'labels': labels,
                     'time': time.time()
                 }
 
+                json_data = json.dumps(prediction_summary)
+
                 # TODO store the prediction_summary in a DynamoDB table
+                dynamodb_table_name = 'Moshiko_Yolo'
+                response = dynamodb_client.put_item(
+                    TableName=dynamodb_table_name,
+                    Item={
+                        'prediction_id': {'S': prediction_id},  # Partition key
+                        'ChatID': {'S': str(chat_id)},  # Sort key
+                        'prediction_summary': {'S': json_data}
+                    }
+                )
+                if response['ResponseMetadata']['HTTPStatusCode'] == 200:
+                    logger.info('Prediction summary stored in DynamoDB')
+                else:
+                    logger.error('Failed to store prediction summary in DynamoDB')
+
                 # TODO perform a GET request to Polybot to `/results` endpoint
+
+                alb_address = 'moshiko-bot.devops-int-college.com:8443'
+                endpoint = f'https://{alb_address}/results/?predictionId={prediction_id}&chatId={chat_id}'
+
+                try:
+                    response = requests.get(endpoint, json=prediction_summary)
+                    if response.status_code == 200:
+                        logger.info('GET request to Polybot successful')
+                    else:
+                        logger.error('Failed to perform GET request to Polybot')
+                except requests.RequestException as e:
+                    logger.error(f'Error in GET request to Polybot: {e}')
 
             # Delete the message from the queue as the job is considered as DONE
             sqs_client.delete_message(QueueUrl=queue_name, ReceiptHandle=receipt_handle)

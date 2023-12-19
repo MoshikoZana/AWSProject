@@ -5,20 +5,22 @@ from bot import ObjectDetectionBot
 import boto3
 from botocore.exceptions import ClientError
 import json
+
 app = flask.Flask(__name__)
+
+TELEGRAM_APP_URL = os.environ['TELEGRAM_APP_URL']
+REGION_NAME = os.environ['REGION_NAME']
 
 
 # TODO load TELEGRAM_TOKEN value from Secret Manager
 def get_secret():
-
     secret_name = "MoshikoSecret"
-    region_name = "eu-north-1"
 
     # Create a Secrets Manager client
     session = boto3.session.Session()
     client = session.client(
         service_name='secretsmanager',
-        region_name=region_name
+        region_name=REGION_NAME
     )
 
     try:
@@ -32,12 +34,11 @@ def get_secret():
 
     # Decrypts secret using the associated KMS key.
     secret = json.loads(get_secret_value_response['SecretString'])
-    secret_value = secret
+    secret_value = secret['TELEGRAM_TOKEN']
     return secret_value
 
 
 TELEGRAM_TOKEN = get_secret()
-TELEGRAM_APP_URL = os.environ['TELEGRAM_APP_URL']
 
 
 @app.route('/', methods=['GET'])
@@ -55,21 +56,22 @@ def webhook():
 @app.route(f'/results/', methods=['GET'])
 def results():
     prediction_id = request.args.get('predictionId')
-
+    chat_id = request.args.get('chatId')
     # TODO use the prediction_id to retrieve results from DynamoDB and send to the end-user
-    dynamodb = boto3.resource('dynamodb', region_name='eu-north-1')
+    dynamodb = boto3.resource('dynamodb', region_name=REGION_NAME)
     table = dynamodb.Table('Moshiko_Yolo')
 
     try:
         response = table.get_item(
             Key={
-                'prediction_id': prediction_id
+                'prediction_id': prediction_id,
+                'ChatID': chat_id,
             }
         )
         item = response.get('Item')
         if item:
-            text_results = item.get('text_results')
-            bot.send_text(prediction_id, text_results)
+            text_results = item
+            bot.send_text(chat_id, text=str(text_results))
             return 'Results sent to the user'
         else:
             return 'No results found for the given prediction ID'
